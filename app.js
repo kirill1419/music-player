@@ -156,6 +156,7 @@ function following(item){
   return songItem(next);
 }
 const engine=new MusicEngine({
+  streamOutput:read('experimental-stream-output',true),
   next:following,
   onActive(item,media){
     $('player-error').textContent='';
@@ -819,3 +820,12 @@ if(typeof window.matchMedia==='function'){
   compact.addEventListener('change',()=>{const focused=document.activeElement;setDrawer(null);if(compact.matches&&(left.contains(focused)||right.contains(focused)))$('drawer-left').focus();});
   setDrawer(null);
 }
+
+
+$('experimental-stream-row').hidden=!engine.isIOS;
+$('experimental-stream-output').checked=read('experimental-stream-output',true);
+$('experimental-stream-output').onchange=()=>{
+  save('experimental-stream-output',$('experimental-stream-output').checked);
+  engine.pause();
+  location.reload();
+};

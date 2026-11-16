@@ -1,13 +1,16 @@
 /* Two independent media channels allow real overlap, including radio interludes. */
 (function(root){
 class MusicEngine {
-  constructor({makeAudio=()=>new Audio(),next=()=>null,onActive=()=>{},onState=()=>{},onTime=()=>{},onFinish=()=>{},onError=()=>{}}={}) {
+  constructor({streamOutput=false,makeAudio=()=>new Audio(),next=()=>null,onActive=()=>{},onState=()=>{},onTime=()=>{},onFinish=()=>{},onError=()=>{}}={}) {
     Object.assign(this,{makeAudio,next,onActive,onState,onTime,onFinish,onError});
     this.active=null;this.prepared=null;this.fade=null;this.volume=.7;this.seconds=0;this.interludeSeconds=0;this.paused=true;this.generation=0;
     this.songNoFade=false;this.interludeNoFade=false;
     const nav=root.navigator;
     this.nativeAudio=!!nav&&(/iPad|iPhone|iPod/.test(nav.userAgent||'')||(nav.platform==='MacIntel'&&nav.maxTouchPoints>1));
-    if(this.nativeAudio){try{if(nav.audioSession)nav.audioSession.type='playback';}catch{}}
+    this.isIOS=this.nativeAudio;
+    this.streamOutput=this.isIOS&&streamOutput;
+    if(this.isIOS){try{if(nav.audioSession)nav.audioSession.type='playback';}catch{}}
+    if(this.streamOutput)this.nativeAudio=false;
 
   }
   channel(item) {
@@ -16,11 +19,16 @@ class MusicEngine {
     const AudioContext=root.AudioContext||root.webkitAudioContext;
     if(AudioContext&&!this.nativeAudio){
       this.audioContext??=new AudioContext();
+      if(this.streamOutput&&!this.streamDestination){
+        this.streamDestination=this.audioContext.createMediaStreamDestination();
+        this.output=this.makeAudio();this.output.autoplay=false;this.output.playsInline=true;
+        this.output.srcObject=this.streamDestination.stream;
+      }
       c.source=this.audioContext.createMediaElementSource(media);c.gain=this.audioContext.createGain();
       if(!this.analyser&&this.audioContext.createAnalyser){
-        this.analyser=this.audioContext.createAnalyser();this.analyser.fftSize=1024;this.analyser.smoothingTimeConstant=.4;this.analyser.connect(this.audioContext.destination);
+        this.analyser=this.audioContext.createAnalyser();this.analyser.fftSize=1024;this.analyser.smoothingTimeConstant=.4;this.analyser.connect(this.streamDestination||this.audioContext.destination);
       }
-      c.source.connect(c.gain);c.gain.connect(this.analyser||this.audioContext.destination);
+      c.source.connect(c.gain);c.gain.connect(this.analyser||this.streamDestination||this.audioContext.destination);
     }
     this.channelGain(c,1);
     const initialize=()=>{if(c.initialized||!Number.isFinite(media.duration))return;c.initialized=true;const {start}=this.bounds(c);media.currentTime=start;c.last=start;};
@@ -30,24 +38,30 @@ class MusicEngine {
     return c;
   }
   dispose(c){if(!c)return;c.media.pause();c.source?.disconnect();c.gain?.disconnect();c.media.removeAttribute('src');c.media.load();}
-  reset(){this.generation++;const channels=new Set([this.active,this.prepared,this.fade?.out]);this.active=this.prepared=this.fade=null;channels.forEach(c=>this.dispose(c));this.paused=true;}
+  reset(){this.generation++;const channels=new Set([this.active,this.prepared,this.fade?.out]);this.active=this.prepared=this.fade=null;channels.forEach(c=>this.dispose(c));this.paused=true;this.output?.pause();}
   async load(item,play=false){this.reset();if(!item){this.onState();return;}this.active=this.channel(item);this.onActive(item,this.active.media);if(play)await this.play();else this.onState();}
   async play(){
     if(!this.active)return;
     if(this.active.finished){this.active.finished=false;this.seek(this.active.media,this.bounds(this.active).start);}
     this.paused=false;
     const channels=[this.active,...(this.fade?[this.fade.out]:[])];
-    try{if(this.audioContext)await this.audioContext.resume();await Promise.all(channels.filter(c=>!c.media.ended).map(c=>c.media.play()));}
+    try{
+      const starts=[];
+      if(this.audioContext)starts.push(this.audioContext.resume());
+      if(this.output)starts.push(this.output.play());
+      starts.push(...channels.filter(c=>!c.media.ended).map(c=>c.media.play()));
+      await Promise.all(starts);
+    }
     catch(e){if(e.name!=='AbortError'){this.pause();this.onError('Нажмите воспроизведение или выберите другой файл.');}}
     this.onState();
   }
-  pause(){this.paused=true;this.active?.media.pause();this.fade?.out.media.pause();this.onState();}
+  pause(){this.paused=true;this.active?.media.pause();this.fade?.out.media.pause();this.output?.pause();this.onState();}
   setVolume(value){this.volume=Math.max(0,Math.min(1,Number(value)||0));this.applyGain();}
   setFade(value){if(this.nativeAudio){this.seconds=0;return;}this.seconds=Math.max(0,Math.min(5,Number(value)||0));}
   setInterludeFade(value){if(this.nativeAudio){this.interludeSeconds=0;return;}this.interludeSeconds=Math.max(0,Math.min(5,Number(value)||0));}
   setNoFade(kind,value){if(kind==='interlude')this.interludeNoFade=Boolean(value);else this.songNoFade=Boolean(value);}
   invalidate(){this.dispose(this.prepared);this.prepared=null;if(this.active)this.active.failedNext=false;}
-  channelGain(c,envelope){const gain=c.item.kind==='song'?Math.max(.5,Math.min(2,Number(c.item.gain)||1)):1;if(c.gain){c.gain.gain.value=gain;c.media.volume=this.volume*envelope;}else c.media.volume=Math.min(1,this.volume*envelope*gain);}
+  channelGain(c,envelope){const gain=c.item.kind==='song'?Math.max(.5,Math.min(2,Number(c.item.gain)||1)):1;if(c.gain){c.gain.gain.value=gain*this.volume*envelope;c.media.volume=1;}else c.media.volume=Math.min(1,this.volume*envelope*gain);}
   applyGain(){if(this.fade){const p=this.fade.progress;this.channelGain(this.fade.out,this.fade.noFade?1:1-p);this.channelGain(this.active,this.fade.noFade?1:p);}else if(this.active)this.channelGain(this.active,1);}
   finish(c){if(c.finished)return;c.finished=true;this.onFinish(c.item);}
   bounds(c){

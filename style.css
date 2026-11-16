@@ -415,3 +415,5 @@
 .controls #repeat{position:relative}
 .controls #repeat sup{position:absolute;top:1px;right:1px;display:grid;place-items:center;min-width:10px;height:12px;padding:0 1px;font-size:10px;font-weight:700;line-height:1;pointer-events:none;border-radius:4px;background:var(--accent);color:#fff}
 @media(max-width:480px){.controls #repeat sup{top:-3px;right:-2px}}
+
+#experimental-stream-row[hidden]{display:none}
