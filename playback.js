@@ -5,12 +5,16 @@ class MusicEngine {
     Object.assign(this,{makeAudio,next,onActive,onState,onTime,onFinish,onError});
     this.active=null;this.prepared=null;this.fade=null;this.volume=.7;this.seconds=0;this.interludeSeconds=0;this.paused=true;this.generation=0;
     this.songNoFade=false;this.interludeNoFade=false;
+    const nav=root.navigator;
+    this.nativeAudio=!!nav&&(/iPad|iPhone|iPod/.test(nav.userAgent||'')||(nav.platform==='MacIntel'&&nav.maxTouchPoints>1));
+    if(this.nativeAudio){try{if(nav.audioSession)nav.audioSession.type='playback';}catch{}}
+
   }
   channel(item) {
     const media=this.makeAudio();media.preload='auto';media.src=item.src;media.volume=this.volume;
     const c={item,media,finished:false,last:0,failedNext:false};
     const AudioContext=root.AudioContext||root.webkitAudioContext;
-    if(AudioContext){
+    if(AudioContext&&!this.nativeAudio){
       this.audioContext??=new AudioContext();
       c.source=this.audioContext.createMediaElementSource(media);c.gain=this.audioContext.createGain();
       if(!this.analyser&&this.audioContext.createAnalyser){
@@ -33,14 +37,14 @@ class MusicEngine {
     if(this.active.finished){this.active.finished=false;this.seek(this.active.media,this.bounds(this.active).start);}
     this.paused=false;
     const channels=[this.active,...(this.fade?[this.fade.out]:[])];
-    try{await this.audioContext?.resume();await Promise.all(channels.filter(c=>!c.media.ended).map(c=>c.media.play()));}
+    try{if(this.audioContext)await this.audioContext.resume();await Promise.all(channels.filter(c=>!c.media.ended).map(c=>c.media.play()));}
     catch(e){if(e.name!=='AbortError'){this.pause();this.onError('Нажмите воспроизведение или выберите другой файл.');}}
     this.onState();
   }
   pause(){this.paused=true;this.active?.media.pause();this.fade?.out.media.pause();this.onState();}
   setVolume(value){this.volume=Math.max(0,Math.min(1,Number(value)||0));this.applyGain();}
-  setFade(value){this.seconds=Math.max(0,Math.min(5,Number(value)||0));}
-  setInterludeFade(value){this.interludeSeconds=Math.max(0,Math.min(5,Number(value)||0));}
+  setFade(value){if(this.nativeAudio){this.seconds=0;return;}this.seconds=Math.max(0,Math.min(5,Number(value)||0));}
+  setInterludeFade(value){if(this.nativeAudio){this.interludeSeconds=0;return;}this.interludeSeconds=Math.max(0,Math.min(5,Number(value)||0));}
   setNoFade(kind,value){if(kind==='interlude')this.interludeNoFade=Boolean(value);else this.songNoFade=Boolean(value);}
   invalidate(){this.dispose(this.prepared);this.prepared=null;if(this.active)this.active.failedNext=false;}
   channelGain(c,envelope){const gain=c.item.kind==='song'?Math.max(.5,Math.min(2,Number(c.item.gain)||1)):1;if(c.gain){c.gain.gain.value=gain;c.media.volume=this.volume*envelope;}else c.media.volume=Math.min(1,this.volume*envelope*gain);}
